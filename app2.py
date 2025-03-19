@@ -1,8 +1,7 @@
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
-from fpdf import FPDF
 from io import BytesIO
+from fpdf import FPDF
 
 # -------------------- CONFIGURAÇÕES INICIAIS --------------------
 st.set_page_config(page_title="COGEX Almoxarifado", layout="wide")
@@ -51,14 +50,16 @@ def export_pdf(df, title):
     pdf.set_font("Arial", 'B', 14)
     pdf.cell(200, 10, txt=title, ln=True, align='C')
     pdf.set_font("Arial", size=8)
-    
+
     col_width = pdf.w / (len(df.columns) + 1)
     row_height = pdf.font_size * 1.5
 
+    # Cabeçalho
     for col in df.columns:
         pdf.cell(col_width, row_height, col, border=1)
     pdf.ln(row_height)
 
+    # Conteúdo
     for i in range(len(df)):
         for item in df.iloc[i]:
             pdf.cell(col_width, row_height, str(item)[:20], border=1)
@@ -83,7 +84,7 @@ if menu == "Pedido de Material":
     csv = pedido.to_csv(index=False).encode('utf-8')
     st.download_button("📥 Baixar Pedido CSV", data=csv, file_name=f'pedido_{dias}dias.csv', mime='text/csv')
 
-    pdf_buffer = export_pdf(pedido, f"Pedido de Material - Cobertura {dias} dias")
+    pdf_buffer = export_pdf(pedido[['Item ID', 'Name', 'Estoque Atual', 'A Pedir', 'Status']], f"Pedido de Material - Cobertura {dias} dias")
     st.download_button("📄 Baixar Pedido PDF", data=pdf_buffer.getvalue(), file_name=f'pedido_{dias}dias.pdf', mime='application/pdf')
 
 # -------------------- ABA 2: ESTOQUE ATUAL --------------------
@@ -98,31 +99,23 @@ elif menu == "Estoque Atual":
     csv_saldo = saldo.to_csv(index=False).encode('utf-8')
     st.download_button("📥 Baixar Estoque CSV", data=csv_saldo, file_name='estoque_atual.csv', mime='text/csv')
 
-    pdf_buffer = export_pdf(saldo, "Estoque Atual")
+    pdf_buffer = export_pdf(saldo[['Item ID', 'Name', 'Saldo Atual', 'Status']], "Estoque Atual")
     st.download_button("📄 Baixar Estoque PDF", data=pdf_buffer.getvalue(), file_name='estoque_atual.pdf', mime='application/pdf')
 
 # -------------------- ABA 3: ESTATÍSTICAS --------------------
 elif menu == "Estatísticas":
     st.header("📈 Análises e Estatísticas")
 
-    # Saldo Atual por Item ID
-    saldo = calcular_saldo_atual(inventory_df)
     st.subheader("Saldo Atual por Item ID")
-    fig, ax = plt.subplots()
-    saldo.plot(kind='bar', ax=ax)
-    plt.xticks(rotation=45)
-    st.pyplot(fig)
+    saldo = calcular_saldo_atual(inventory_df).reset_index()
+    saldo.columns = ['Item ID', 'Saldo Atual']
+    st.dataframe(saldo, use_container_width=True)
 
-    # Movimentação histórica
     st.subheader("Movimentação Histórica por Mês")
     inventory_df['Mes/Ano'] = inventory_df['DateTime'].dt.to_period('M')
-    movimento = inventory_df.groupby('Mes/Ano')['Amount'].sum()
-    fig2, ax2 = plt.subplots()
-    movimento.plot(kind='line', ax=ax2, marker='o')
-    plt.xticks(rotation=45)
-    st.pyplot(fig2)
+    movimento = inventory_df.groupby('Mes/Ano')['Amount'].sum().reset_index()
+    st.dataframe(movimento, use_container_width=True)
 
-    # Total de Movimentações
     st.subheader("Total de Movimentações Registradas")
     st.write(f"Total de registros no inventário: **{len(inventory_df)}**")
 
