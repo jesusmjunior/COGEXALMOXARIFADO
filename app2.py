@@ -5,14 +5,19 @@ import pandas as pd
 st.set_page_config(page_title="COGEX Almoxarifado", layout="wide")
 
 st.title("📦 COGEX ALMOXARIFADO")
-st.markdown("**Sistema de Gestão de Pedido de Material Automatizado**")
+st.markdown("**Sistema de Gestão de Pedido de Material Automatizado - Integração Google Sheets**")
 
-# -------------------- CARREGAMENTO DE DADOS --------------------
-@st.cache_data(show_spinner="Carregando dados...")
+# -------------------- FUNÇÃO PARA LER GOOGLE SHEETS --------------------
+@st.cache_data(show_spinner="Carregando dados do Google Sheets...")
 def load_data():
-    items = pd.read_csv('data/items.csv')
-    inventory = pd.read_csv('data/inventory.csv')
-    inventory['DateTime'] = pd.to_datetime(inventory['DateTime'])
+    url_base = 'https://docs.google.com/spreadsheets/d/1NLLZoIxIZ2u-liHGKM5P8WNXdu3ycCoUUiD3f0FsR84/export?format=csv&gid='
+    
+    gid_items = '0'  # Aba Items (pode variar)
+    gid_inventory = '1226654279'  # Aba Inventory (verificar no link do Google Sheets)
+    
+    items = pd.read_csv(url_base + gid_items)
+    inventory = pd.read_csv(url_base + gid_inventory)
+    inventory['DateTime'] = pd.to_datetime(inventory['DateTime'], errors='coerce')
     return items, inventory
 
 items_df, inventory_df = load_data()
@@ -88,4 +93,4 @@ elif menu == "Estatísticas":
 
 # -------------------- RODAPÉ --------------------
 st.markdown("---")
-st.markdown("**COGEX ALMOXARIFADO - SISTEMA DE PEDIDO DE MATERIAL AUTOMATIZADO | Powered by Streamlit**")
+st.markdown("**COGEX ALMOXARIFADO - Sistema integrado com Google Sheets | Powered by Streamlit**")
