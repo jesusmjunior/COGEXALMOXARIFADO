@@ -1,13 +1,17 @@
+# app.py
+
 import streamlit as st
 import pandas as pd
+import numpy as np
+import altair as alt
+from datetime import datetime, timedelta
 
 # -------------------- CONFIGURAÇÕES INICIAIS --------------------
 st.set_page_config(page_title="COGEX Almoxarifado", layout="wide")
+st.title("\ud83d\udce6 COGEX ALMOXARIFADO")
+st.markdown("**Sistema Integrado Google Sheets - Pedido de Material com Imagens e Filtros**")
 
-st.title("📦 COGEX ALMOXARIFADO")
-st.markdown("**Sistema Integrado Google Sheets - Pedido de Material Completo com Imagens e Filtros**")
-
-# -------------------- CARREGAMENTO DE DADOS DO GOOGLE SHEETS --------------------
+# -------------------- CARREGAMENTO DE DADOS --------------------
 @st.cache_data(show_spinner="Carregando dados do Google Sheets...")
 def load_data():
     url_inventory = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSeWsxmLFzuWsa2oggpQb6p5SFapxXHcWaIl0Jjf2wAezvMgAV9XCc1r7fSSzRWTCgjk9eqREgWlrzp/pub?gid=1710164548&single=true&output=csv'
@@ -20,85 +24,65 @@ def load_data():
 
 items_df, inventory_df = load_data()
 
-# -------------------- FUNÇÕES UTILITÁRIAS --------------------
-def calcular_consumo_medio(inventory):
-    consumo = inventory[inventory['Amount'] < 0].groupby('Item ID')['Amount'].sum().abs()
-    dias = (inventory['DateTime'].max() - inventory['DateTime'].min()).days
-    consumo_medio = consumo / dias
-    return consumo_medio
+# -------------------- PREPARAÇÃO DOS DADOS --------------------
+merged_df = pd.merge(inventory_df, items_df, on='Item ID', how='left')
+merged_df['Ano'] = merged_df['DateTime'].dt.year
+merged_df['M\u00eas'] = merged_df['DateTime'].dt.month
+merged_df['Semana'] = merged_df['DateTime'].dt.isocalendar().week
 
-def calcular_saldo_atual(inventory):
-    saldo = inventory.groupby('Item ID')['Amount'].sum()
-    return saldo
+# -------------------- FILTROS LATERAIS --------------------
+st.sidebar.title("Filtros")
+produtos = st.sidebar.multiselect("Selecione os Produtos:", options=items_df['Name'].unique(), default=items_df['Name'].unique())
+filtered_df = merged_df[merged_df['Name'].isin(produtos)]
 
-def gerar_pedido(cobertura_dias):
-    consumo = calcular_consumo_medio(inventory_df)
-    saldo = calcular_saldo_atual(inventory_df)
+# -------------------- CONSUMO M\u00c9DIO --------------------
+st.header("\ud83d\udcca Consumo M\u00e9dio & Pedido de Material")
 
-    pedido_df = pd.DataFrame()
-    pedido_df['Consumo Médio Diário'] = consumo
-    pedido_df['Estoque Atual'] = saldo
-    pedido_df['Necessidade'] = (pedido_df['Consumo Médio Diário'] * cobertura_dias).round()
-    pedido_df['A Pedir'] = pedido_df['Necessidade'] - pedido_df['Estoque Atual']
-    pedido_df['Status'] = pedido_df['A Pedir'].apply(lambda x: 'Dentro do padrão' if x <= 0 else 'Reposição necessária')
-    pedido_df = pedido_df.reset_index()
-    pedido_df = pd.merge(pedido_df, items_df[['Item ID', 'Name', 'Description', 'Image']], on='Item ID', how='left')
-    return pedido_df
+def consumo_medio(df, dias):
+    data_limite = datetime.now() - timedelta(days=dias)
+    consumo = df[(df['DateTime'] >= data_limite) & (df['Amount'] < 0)]
+    consumo_agrupado = consumo.groupby('Name')['Amount'].sum().abs().reset_index()
+    consumo_agrupado.rename(columns={'Amount': f'Consumo M\u00e9dio {dias} dias'}, inplace=True)
+    return consumo_agrupado
 
-# -------------------- INTERFACE STREAMLIT --------------------
-menu = st.sidebar.selectbox("Navegar", ["Pedido de Material", "Estoque Atual com Imagens", "Estatísticas"])
+consumo_7 = consumo_medio(filtered_df, 7)
+consumo_15 = consumo_medio(filtered_df, 15)
+consumo_30 = consumo_medio(filtered_df, 30)
+consumo_45 = consumo_medio(filtered_df, 45)
 
-# -------------------- ABA PEDIDO DE MATERIAL --------------------
-if menu == "Pedido de Material":
-    st.header("📄 Pedido de Material Automático")
-    dias = st.radio("Selecione a Cobertura (Dias):", [7, 15, 30, 45], horizontal=True)
+consumo_total = consumo_7.merge(consumo_15, on='Name', how='outer').merge(consumo_30, on='Name', how='outer').merge(consumo_45, on='Name', how='outer').fillna(0)
 
-    pedido = gerar_pedido(dias)
-    st.subheader(f"Pedido de Material para {dias} dias de cobertura:")
-    st.dataframe(pedido[['Item ID', 'Name', 'Estoque Atual', 'A Pedir', 'Status']], use_container_width=True)
+estoque_atual = inventory_df.groupby('Item ID')['Amount'].sum().reset_index()
+estoque_atual = pd.merge(estoque_atual, items_df[['Item ID', 'Name']], on='Item ID', how='left')
 
-    csv = pedido.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Baixar Pedido CSV", data=csv, file_name=f'pedido_{dias}dias.csv', mime='text/csv')
+pedido_material = pd.merge(consumo_total, estoque_atual, on='Name', how='left')
+pedido_material['Estoque Atual'] = pedido_material['Amount']
+pedido_material.drop(columns=['Amount'], inplace=True)
 
-# -------------------- ABA ESTOQUE ATUAL COM IMAGENS --------------------
-elif menu == "Estoque Atual com Imagens":
-    st.header("📊 Estoque Atual com Nome e Imagem")
-    saldo = calcular_saldo_atual(inventory_df).reset_index()
-    saldo.columns = ['Item ID', 'Saldo Atual']
-    saldo = pd.merge(saldo, items_df[['Item ID', 'Name', 'Image']], on='Item ID', how='left')
+pedido_material['Recomenda\u00e7\u00e3o Pedido'] = np.where(pedido_material['Estoque Atual'] < pedido_material['Consumo M\u00e9dio 15 dias'], 'Pedido Necess\u00e1rio', 'OK')
 
-    # Filtro por nome
-    search_name = st.text_input("🔍 Buscar Produto pelo Nome:")
-    if search_name:
-        saldo = saldo[saldo['Name'].str.contains(search_name, case=False, na=False)]
+st.dataframe(pedido_material)
 
-    # Filtro para saldo negativo
-    saldo_negativo = st.checkbox("Mostrar apenas itens com saldo negativo")
-    if saldo_negativo:
-        saldo = saldo[saldo['Saldo Atual'] < 0]
+# -------------------- GR\u00c1FICOS --------------------
+st.subheader("\ud83d\udcc8 Gr\u00e1fico - Consumo M\u00e9dio por Produto (15 dias)")
+chart = alt.Chart(pedido_material).mark_bar().encode(
+    x=alt.X('Name:N', sort='-y'),
+    y='Consumo M\u00e9dio 15 dias:Q',
+    color=alt.Color('Recomenda\u00e7\u00e3o Pedido:N', scale=alt.Scale(domain=['Pedido Necess\u00e1rio', 'OK'], range=['red', 'green'])),
+    tooltip=['Name', 'Estoque Atual', 'Consumo M\u00e9dio 15 dias', 'Recomenda\u00e7\u00e3o Pedido']
+).properties(width=900, height=400)
 
-    for index, row in saldo.iterrows():
-        st.write(f"**{row['Name']}** - Saldo Atual: {row['Saldo Atual']}")
-        if pd.notna(row['Image']):
-            st.image(row['Image'], width=150)
+st.altair_chart(chart)
 
-    # Download CSV
-    csv_saldo = saldo.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Baixar Estoque Filtrado CSV", data=csv_saldo, file_name='estoque_atual_filtrado.csv', mime='text/csv')
+# -------------------- RANKING --------------------
+st.subheader("\ud83c\udfc6 Ranking - Itens Mais Consumidos (\u00daltimos 30 dias)")
+ranking_30 = consumo_medio(filtered_df, 30).sort_values(by='Consumo M\u00e9dio 30 dias', ascending=False)
+st.table(ranking_30)
 
-# -------------------- ABA ESTATÍSTICAS --------------------
-elif menu == "Estatísticas":
-    st.header("📈 Análises e Estatísticas")
-
-    st.subheader("Saldo Atual por Item ID")
-    saldo = calcular_saldo_atual(inventory_df).reset_index()
-    saldo.columns = ['Item ID', 'Saldo Atual']
-    saldo = pd.merge(saldo, items_df[['Item ID', 'Name']], on='Item ID', how='left')
-    st.dataframe(saldo[['Item ID', 'Name', 'Saldo Atual']], use_container_width=True)
-
-    st.subheader("Total de Movimentações Registradas")
-    st.write(f"Total de registros no inventário: **{len(inventory_df)}**")
-
-# -------------------- RODAPÉ --------------------
-st.markdown("---")
-st.markdown("**COGEX ALMOXARIFADO - Integração Google Sheets Completo | Powered by Streamlit**")
+# -------------------- RELAT\u00d3RIO DE PEDIDO --------------------
+st.download_button(
+    label="\ud83d\udcc5 Baixar Relat\u00f3rio Pedido (CSV)",
+    data=pedido_material.to_csv(index=False).encode('utf-8'),
+    file_name='pedido_material_cogex.csv',
+    mime='text/csv'
+)
